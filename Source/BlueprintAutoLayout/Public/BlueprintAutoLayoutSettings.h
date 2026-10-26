@@ -68,6 +68,18 @@ public:
 		meta = (DisplayName = "Knot-route long edges", EditCondition = "bUseLayeredEngine"))
 	bool bMaterializeLongEdges = true;
 
+	/** Keep existing material comment groups together when arranging the graph. */
+	UPROPERTY(EditAnywhere, config, Category = "Material Editor")
+	bool bPreserveMaterialCommentGroups = true;
+
+	/** Frame the nodes affected by a Material Editor layout action. */
+	UPROPERTY(EditAnywhere, config, Category = "Material Editor")
+	bool bFrameMaterialLayout = true;
+
+	// Per-user locks, keyed by asset identity and persistent expression GUID.
+	UPROPERTY(config)
+	TArray<FString> PinnedMaterialNodes;
+
 	/**
 	 * How the plain "Auto Layout Graph" / "Auto Layout & Group Graph" actions (and the keyboard
 	 * shortcut) handle wires. "Straighten & move nodes" is the default: straight lines, nodes moved

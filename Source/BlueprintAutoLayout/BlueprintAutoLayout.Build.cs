@@ -23,6 +23,7 @@ public class BlueprintAutoLayout : ModuleRules
 			"BlueprintGraph",
 			"Kismet",
 			"GraphEditor",
+			"MaterialEditor",
 			"Slate",
 			"SlateCore",
 			"ToolMenus",

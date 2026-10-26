@@ -181,6 +181,9 @@ public:
 	const TMap<UEdGraphNode*, FLayoutNodeInfo>& GetLayoutInfo() const { return NodeInfoMap; }
 
 private:
+	// Material graphs use the data-flow layered solver without K2 rewiring.
+	int32 LayoutMaterialGraph(UEdGraph* Graph, const TArray<UEdGraphNode*>* Selection, int32 StartX, int32 StartY);
+
 	FBlueprintLayoutConfig Config;
 	TMap<UEdGraphNode*, FLayoutNodeInfo> NodeInfoMap;
 	TArray<FLayoutNodeInfo*> RootNodes;

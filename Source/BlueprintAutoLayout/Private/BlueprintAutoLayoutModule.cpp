@@ -4,12 +4,15 @@
 #include "BlueprintAutoLayout.h"
 #include "BlueprintAutoLayoutSettings.h"
 #include "BlueprintAutoLayoutCommands.h"
+#include "BPALMaterialTools.h"
 #include "ACPDistTools/ACPMenu.h"
 
 #include "BlueprintEditor.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraphSchema_K2.h"
+#include "MaterialGraph/MaterialGraph.h"
+#include "MaterialGraph/MaterialGraphSchema.h"
 #include "Framework/Application/IInputProcessor.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Commands/InputChord.h"
@@ -104,9 +107,8 @@ static void ExecuteDefaultAction(UEdGraph* Graph)
 // Keyboard shortcut handling
 //------------------------------------------------------------------------------
 
-// Walk up the widget tree from the focused widget to find the Blueprint graph editor (if any)
-// the user is currently working in. Returns null when focus isn't inside a K2 graph editor.
-static TSharedPtr<SGraphEditor> FindFocusedBlueprintGraphEditor(FSlateApplication& SlateApp, int32 UserIndex)
+// Walk up from focus to the supported Blueprint or Material graph editor.
+static TSharedPtr<SGraphEditor> FindFocusedLayoutGraphEditor(FSlateApplication& SlateApp, int32 UserIndex)
 {
 	TSharedPtr<SGraphEditor> Result;
 	for (TSharedPtr<SWidget> W = SlateApp.GetUserFocusedWidget(UserIndex); W.IsValid(); W = W->GetParentWidget())
@@ -123,9 +125,10 @@ static TSharedPtr<SGraphEditor> FindFocusedBlueprintGraphEditor(FSlateApplicatio
 	if (Result.IsValid())
 	{
 		const UEdGraph* Graph = Result->GetCurrentGraph();
-		if (!Graph || !Graph->GetSchema() || !Graph->GetSchema()->IsA<UEdGraphSchema_K2>())
+		if (!Graph || !Graph->GetSchema() ||
+			(!Graph->GetSchema()->IsA<UEdGraphSchema_K2>() && !Graph->IsA<UMaterialGraph>()))
 		{
-			// A non-Blueprint graph editor (material, Niagara, …) — not ours to lay out.
+			// Unsupported graph editor.
 			Result.Reset();
 		}
 	}
@@ -139,7 +142,12 @@ class FBlueprintAutoLayoutInputProcessor : public IInputProcessor
 public:
 	virtual ~FBlueprintAutoLayoutInputProcessor() override = default;
 
-	virtual void Tick(const float /*DeltaTime*/, FSlateApplication& /*SlateApp*/, TSharedRef<ICursor> /*Cursor*/) override {}
+	virtual void Tick(const float /*DeltaTime*/, FSlateApplication& /*SlateApp*/, TSharedRef<ICursor> /*Cursor*/) override
+	{
+#if BPAL_MATERIAL_TOOLS
+		BPALMaterialTools::TrackFocusedGraph();
+#endif
+	}
 
 	virtual bool HandleKeyDownEvent(FSlateApplication& SlateApp, const FKeyEvent& InKeyEvent) override
 	{
@@ -162,7 +170,7 @@ public:
 			return false;
 		}
 
-		TSharedPtr<SGraphEditor> GraphEd = FindFocusedBlueprintGraphEditor(SlateApp, InKeyEvent.GetUserIndex());
+		TSharedPtr<SGraphEditor> GraphEd = FindFocusedLayoutGraphEditor(SlateApp, InKeyEvent.GetUserIndex());
 		if (!GraphEd.IsValid())
 		{
 			return false; // not in a Blueprint graph — let the key fall through to other handlers
@@ -276,6 +284,9 @@ void FBlueprintAutoLayoutModule::ShutdownModule()
 
 void FBlueprintAutoLayoutModule::ExecuteLayoutOnGraph(UEdGraph* Graph)
 {
+#if BPAL_MATERIAL_TOOLS
+	if (UMaterialGraph* Material = Cast<UMaterialGraph>(Graph)) { BPALMaterialTools::Run(Material, BPALMaterialTools::EAction::Graph); return; }
+#endif
 	if (!Graph)
 	{
 		return;
@@ -309,6 +320,9 @@ void FBlueprintAutoLayoutModule::ExecuteLayoutOnGraph(UEdGraph* Graph)
 
 void FBlueprintAutoLayoutModule::ExecuteLayoutAndGroupOnGraph(UEdGraph* Graph)
 {
+#if BPAL_MATERIAL_TOOLS
+	if (UMaterialGraph* Material = Cast<UMaterialGraph>(Graph)) { BPALMaterialTools::Run(Material, BPALMaterialTools::EAction::Group); return; }
+#endif
 	if (!Graph)
 	{
 		return;
@@ -340,6 +354,9 @@ void FBlueprintAutoLayoutModule::ExecuteLayoutAndGroupOnGraph(UEdGraph* Graph)
 
 void FBlueprintAutoLayoutModule::ExecuteLayoutAndRouteOnGraph(UEdGraph* Graph)
 {
+#if BPAL_MATERIAL_TOOLS
+	if (UMaterialGraph* Material = Cast<UMaterialGraph>(Graph)) { BPALMaterialTools::Run(Material, BPALMaterialTools::EAction::Route); return; }
+#endif
 	if (!Graph)
 	{
 		return;
@@ -366,6 +383,9 @@ void FBlueprintAutoLayoutModule::ExecuteLayoutAndRouteOnGraph(UEdGraph* Graph)
 
 void FBlueprintAutoLayoutModule::ExecuteLayoutGroupAndRouteOnGraph(UEdGraph* Graph)
 {
+#if BPAL_MATERIAL_TOOLS
+	if (UMaterialGraph* Material = Cast<UMaterialGraph>(Graph)) { BPALMaterialTools::Run(Material, BPALMaterialTools::EAction::GroupAndRoute); return; }
+#endif
 	if (!Graph)
 	{
 		return;
@@ -390,6 +410,9 @@ void FBlueprintAutoLayoutModule::ExecuteLayoutGroupAndRouteOnGraph(UEdGraph* Gra
 
 void FBlueprintAutoLayoutModule::ExecuteLayoutSelectedOnGraph(UEdGraph* Graph, const TArray<UEdGraphNode*>& SelectedNodes)
 {
+#if BPAL_MATERIAL_TOOLS
+	if (UMaterialGraph* Material = Cast<UMaterialGraph>(Graph)) { BPALMaterialTools::Run(Material, BPALMaterialTools::EAction::Selected, SelectedNodes); return; }
+#endif
 	if (!Graph || SelectedNodes.Num() == 0)
 	{
 		return;
@@ -427,25 +450,9 @@ void FBlueprintAutoLayoutModule::ExecuteLayoutSelectedOnGraph(UEdGraph* Graph, c
 	Graph->NotifyGraphChanged();
 }
 
-void FBlueprintAutoLayoutModule::RegisterMenuExtensions()
+static void RegisterLayoutContextMenu(UToolMenus* ToolMenus, FName ContextMenuName)
 {
-	UToolMenus* ToolMenus = UToolMenus::Get();
-	if (!ToolMenus)
-	{
-		return;
-	}
-
-	// Scope all subsequent registrations to our named owner so ShutdownModule()
-	// can cleanly tear everything down via UnregisterOwnerByName.
-	FToolMenuOwnerScoped OwnerScope(GAutoLayoutOwnerName);
-
-	// The Blueprint graph context menu is built from a chain of UToolMenus, one per schema
-	// in the schema's inheritance chain. The K2 schema's menu name follows the convention:
-	//   GraphEditor.GraphContextMenu.EdGraphSchema_K2
-	// Hooking this level catches all UEdGraphSchema_K2-derived schemas (Blueprint, Anim BP).
-	const FName K2ContextMenuName = UEdGraphSchema::GetContextMenuName(UEdGraphSchema_K2::StaticClass());
-
-	UToolMenu* Menu = ToolMenus->ExtendMenu(K2ContextMenuName);
+	UToolMenu* Menu = ToolMenus->ExtendMenu(ContextMenuName);
 	if (!Menu)
 	{
 		return;
@@ -470,6 +477,14 @@ void FBlueprintAutoLayoutModule::RegisterMenuExtensions()
 				return;
 			}
 
+#if BPAL_MATERIAL_TOOLS
+			if (UMaterialGraph* Material = Cast<UMaterialGraph>(const_cast<UEdGraph*>(Context->Graph.Get())))
+			{
+				if (!Context->Pin) BPALMaterialTools::AddContextEntries(InSection, Material, const_cast<UEdGraphNode*>(Context->Node.Get()));
+				return;
+			}
+#endif
+
 			// Only show on empty-graph context (no specific node, no specific pin).
 			if (Context->Node || Context->Pin)
 			{
@@ -490,44 +505,47 @@ void FBlueprintAutoLayoutModule::RegisterMenuExtensions()
 			InSection.AddMenuEntry(
 				"AutoLayoutGraph",
 				LOCTEXT("AutoLayoutGraphLabel", "Auto Layout Graph"),
-				LOCTEXT("AutoLayoutGraphTooltip", "Automatically arrange this graph's nodes for readable execution flow"),
+				LOCTEXT("AutoLayoutGraphTooltip", "Automatically arrange this graph's nodes for readable execution or data flow"),
 				FSlateIcon(BPAL_STYLE_SETNAME, "GraphEditor.AlignNodesTop"),
 				FUIAction(FExecuteAction::CreateLambda([Graph]()
 				{
 					FBlueprintAutoLayoutModule::ExecuteLayoutOnGraph(Graph);
 				})));
 
-			InSection.AddMenuEntry(
-				"AutoLayoutAndGroupGraph",
-				LOCTEXT("AutoLayoutGroupGraphLabel", "Auto Layout && Group Graph"),
-				LOCTEXT("AutoLayoutGroupGraphTooltip", "Arrange the graph, then wrap each event/function subtree in a comment box named after its root"),
-				FSlateIcon(BPAL_STYLE_SETNAME, "GraphEditor.AlignNodesTop"),
-				FUIAction(FExecuteAction::CreateLambda([Graph]()
-				{
-					FBlueprintAutoLayoutModule::ExecuteLayoutAndGroupOnGraph(Graph);
-				})));
+			if (!Graph->IsA<UMaterialGraph>())
+			{
+				InSection.AddMenuEntry(
+					"AutoLayoutAndGroupGraph",
+					LOCTEXT("AutoLayoutGroupGraphLabel", "Auto Layout && Group Graph"),
+					LOCTEXT("AutoLayoutGroupGraphTooltip", "Arrange the graph, then wrap each event/function subtree in a comment box named after its root"),
+					FSlateIcon(BPAL_STYLE_SETNAME, "GraphEditor.AlignNodesTop"),
+					FUIAction(FExecuteAction::CreateLambda([Graph]()
+					{
+						FBlueprintAutoLayoutModule::ExecuteLayoutAndGroupOnGraph(Graph);
+					})));
 
-			InSection.AddMenuEntry(
-				"AutoLayoutAndRouteGraph",
-				LOCTEXT("AutoLayoutRouteGraphLabel", "Auto Layout (Route Wires)"),
-				LOCTEXT("AutoLayoutRouteGraphTooltip", "Arrange the graph, then insert reroute (knot) nodes so wires bend around nodes instead of cutting across them"),
-				FSlateIcon(BPAL_STYLE_SETNAME, "GraphEditor.AlignNodesTop"),
-				FUIAction(FExecuteAction::CreateLambda([Graph]()
-				{
-					FBlueprintAutoLayoutModule::ExecuteLayoutAndRouteOnGraph(Graph);
-				})));
+				InSection.AddMenuEntry(
+					"AutoLayoutAndRouteGraph",
+					LOCTEXT("AutoLayoutRouteGraphLabel", "Auto Layout (Route Wires)"),
+					LOCTEXT("AutoLayoutRouteGraphTooltip", "Arrange the graph, then insert reroute (knot) nodes so wires bend around nodes instead of cutting across them"),
+					FSlateIcon(BPAL_STYLE_SETNAME, "GraphEditor.AlignNodesTop"),
+					FUIAction(FExecuteAction::CreateLambda([Graph]()
+					{
+						FBlueprintAutoLayoutModule::ExecuteLayoutAndRouteOnGraph(Graph);
+					})));
 
-			InSection.AddMenuEntry(
-				"AutoLayoutGroupAndRouteGraph",
-				LOCTEXT("AutoLayoutGroupRouteGraphLabel", "Auto Layout, Group && Route"),
-				LOCTEXT("AutoLayoutGroupRouteGraphTooltip", "Arrange the graph, wrap each subtree in an auto-named comment box, then reroute wires around obstacle nodes"),
-				FSlateIcon(BPAL_STYLE_SETNAME, "GraphEditor.AlignNodesTop"),
-				FUIAction(FExecuteAction::CreateLambda([Graph]()
-				{
-					FBlueprintAutoLayoutModule::ExecuteLayoutGroupAndRouteOnGraph(Graph);
-				})));
+				InSection.AddMenuEntry(
+					"AutoLayoutGroupAndRouteGraph",
+					LOCTEXT("AutoLayoutGroupRouteGraphLabel", "Auto Layout, Group && Route"),
+					LOCTEXT("AutoLayoutGroupRouteGraphTooltip", "Arrange the graph, wrap each subtree in an auto-named comment box, then reroute wires around obstacle nodes"),
+					FSlateIcon(BPAL_STYLE_SETNAME, "GraphEditor.AlignNodesTop"),
+					FUIAction(FExecuteAction::CreateLambda([Graph]()
+					{
+						FBlueprintAutoLayoutModule::ExecuteLayoutGroupAndRouteOnGraph(Graph);
+					})));
+			}
 
-			// "Layout Selected" — only when nodes are selected in this graph's open editor.
+			// "Layout Selected" - only when nodes are selected in this graph's open editor.
 			TArray<UEdGraphNode*> Selected;
 			if (TSharedPtr<SGraphEditor> Ed = SGraphEditor::FindGraphEditorForGraph(Graph))
 			{
@@ -553,8 +571,29 @@ void FBlueprintAutoLayoutModule::RegisterMenuExtensions()
 			}
 		}));
 
+}
+
+void FBlueprintAutoLayoutModule::RegisterMenuExtensions()
+{
+	UToolMenus* ToolMenus = UToolMenus::Get();
+	if (!ToolMenus) return;
+	FToolMenuOwnerScoped OwnerScope(GAutoLayoutOwnerName);
+
+	// Schema-level menus include derived Blueprint and Material schemas.
+	const FName ContextMenuNames[] = {
+		UEdGraphSchema::GetContextMenuName(UEdGraphSchema_K2::StaticClass()),
+		UEdGraphSchema::GetContextMenuName(UMaterialGraphSchema::StaticClass())
+	};
+	for (const FName ContextMenuName : ContextMenuNames)
+	{
+		RegisterLayoutContextMenu(ToolMenus, ContextMenuName);
+	}
+
 	// Add the toolbar button to the Blueprint editor's toolbar.
 	RegisterToolbarExtension();
+#if BPAL_MATERIAL_TOOLS
+	BPALMaterialTools::RegisterToolbar(ToolMenus);
+#endif
 
 	ACPMenu::RegisterProduct(
 		TEXT("BPAutoLayout"),

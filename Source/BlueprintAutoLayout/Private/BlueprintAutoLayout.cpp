@@ -12,9 +12,12 @@
 #include "GraphEditor.h"
 #include "SGraphPanel.h"
 #include "SGraphNode.h"
+#include "MaterialGraph/MaterialGraph.h"
+#include "BPALMaterialTools.h"
 
 int32 FBlueprintAutoLayout::LayoutGraph(UEdGraph* Graph, int32 StartX, int32 StartY)
 {
+	if (Cast<UMaterialGraph>(Graph)) return LayoutMaterialGraph(Graph, nullptr, StartX, StartY);
 	if (!Graph)
 	{
 		return 0;
@@ -97,6 +100,7 @@ int32 FBlueprintAutoLayout::LayoutGraph(UEdGraph* Graph, int32 StartX, int32 Sta
 
 int32 FBlueprintAutoLayout::LayoutSubtree(UEdGraph* Graph, const TArray<UEdGraphNode*>& SpecificRoots, int32 StartX, int32 StartY)
 {
+	if (Cast<UMaterialGraph>(Graph)) return LayoutMaterialGraph(Graph, &SpecificRoots, StartX, StartY);
 	if (!Graph || SpecificRoots.Num() == 0)
 	{
 		return 0;
@@ -143,6 +147,15 @@ int32 FBlueprintAutoLayout::LayoutSubtree(UEdGraph* Graph, const TArray<UEdGraph
 
 int32 FBlueprintAutoLayout::LayoutAndGroupGraph(UEdGraph* Graph, int32 StartX, int32 StartY)
 {
+	if (UMaterialGraph* Material = Cast<UMaterialGraph>(Graph))
+	{
+		const int32 Count = LayoutGraph(Graph, StartX, StartY);
+#if BPAL_MATERIAL_TOOLS
+		BPALMaterialTools::GroupOutputs(Material);
+		LayoutGraph(Graph, StartX, StartY);
+#endif
+		return Count;
+	}
 	// Run the normal layout first. The tree state (RootNodes, NodeInfoMap, ExecChildren,
 	// DataProviders) persists afterward, so CreateGroupComments can use it.
 	const int32 Count = LayoutGraph(Graph, StartX, StartY);
@@ -155,6 +168,17 @@ int32 FBlueprintAutoLayout::LayoutAndGroupGraph(UEdGraph* Graph, int32 StartX, i
 
 int32 FBlueprintAutoLayout::LayoutAndRouteGraph(UEdGraph* Graph, int32 StartX, int32 StartY)
 {
+	if (UMaterialGraph* Material = Cast<UMaterialGraph>(Graph))
+	{
+#if BPAL_MATERIAL_TOOLS
+		BPALMaterialTools::RemoveGeneratedRoutes(Material);
+#endif
+		const int32 Count = LayoutGraph(Graph, StartX, StartY);
+#if BPAL_MATERIAL_TOOLS
+		BPALMaterialTools::RouteWires(Material);
+#endif
+		return Count;
+	}
 	if (!Graph)
 	{
 		return 0;
@@ -174,6 +198,17 @@ int32 FBlueprintAutoLayout::LayoutAndRouteGraph(UEdGraph* Graph, int32 StartX, i
 
 int32 FBlueprintAutoLayout::LayoutGroupAndRouteGraph(UEdGraph* Graph, int32 StartX, int32 StartY)
 {
+	if (UMaterialGraph* Material = Cast<UMaterialGraph>(Graph))
+	{
+#if BPAL_MATERIAL_TOOLS
+		BPALMaterialTools::RemoveGeneratedRoutes(Material);
+#endif
+		const int32 Count = LayoutAndGroupGraph(Graph, StartX, StartY);
+#if BPAL_MATERIAL_TOOLS
+		BPALMaterialTools::RouteWires(Material);
+#endif
+		return Count;
+	}
 	if (!Graph)
 	{
 		return 0;

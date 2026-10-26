@@ -56,7 +56,7 @@ Blueprint Anti-Pasta exists to go beyond that baseline:
 - **Three ways to trigger it** — a rebindable keyboard shortcut (Ctrl/Cmd+Shift+L / K), a toolbar combo-dropdown with a "sticky" last-used default, and a right-click context menu on empty graph space.
 - **A verified compatibility matrix from UE 4.27 through 5.8**, most of it runtime-confirmed rather than just compiled — see [Engine support](#engine-support).
 
-Neither tool does everything: neither handles Material/Niagara/Behavior-Tree graphs (Blueprint and Animation Blueprint only, here), and untangling a node with many inbound wires is an open problem for both (Graph Formatter's own docs say so). If you only need clean columns, Graph Formatter is the more mature, broader-scope tool. This plugin trades some of that scope for auto-grouping, knot routing, and a codebase built to be easy to read and demo in a classroom setting.
+Neither tool does everything: Niagara and Behavior-Tree graphs are outside this plugin's scope, and untangling a node with many inbound wires remains an open problem. This plugin also provides basic Material Editor layout, described below. If you only need clean columns, Graph Formatter is the more mature, broader-scope tool. This plugin adds auto-grouping, knot routing for Blueprints, and a codebase built to be easy to read and demo in a classroom setting.
 
 ## Install
 
@@ -104,6 +104,50 @@ Whichever way you trigger it, the change is wrapped in a single transaction — 
 The grouping actions color each comment box by reading keywords in its root node's title, so a graph's groups read at a glance — `Damage`/`Hit`→red, `Destroy`/`Death`→dark red, `Spawn`/`Create`→green, `Begin`/`Init`→blue, `Tick`/`Update`→teal, `Input`/`Pressed`→amber, `Overlap`/`Collision`→violet. Names with no keyword get a stable color derived from the title:
 
 ![Group comment boxes auto-colored by keyword](Docs/grouped-colored.png)
+
+### Material Editor (UE 5.8)
+
+Material and material-function graphs use a layered data-flow solver, arranging
+sources to the left of their consumers. Actions are available in the Material Editor's
+**Auto Layout** toolbar dropdown and the graph's **Layout** context-menu section.
+The toolbar targets that editor's visible graph, including material subgraphs.
+
+| Action | Behavior |
+| --- | --- |
+| **Auto Layout Graph** | Arrange the graph. Also **Ctrl/Cmd+Shift+L** with graph focus; the toolbar's primary click runs this action. |
+| **Auto Layout Selected** | Arrange only selected expressions in place. Also **Ctrl/Cmd+Shift+K**. Unselected expressions stay put. |
+| **Layout Connected Chain** | Select an output or expression to arrange it and all upstream dependencies. Includes named reroute declarations, preserves downstream fan-out, and does not move unrelated branches. |
+| **Auto Layout & Group by Output** | Create named, consistently colored comments for connected material inputs such as Base Color, Roughness and Normal, or material-function outputs. Dependencies used by several outputs get one **Shared Dependencies** group. |
+| **Auto Layout & Route Wires** | Insert real material reroute expressions on long or obstructed data wires. Plugin-created reroutes are replaced on reruns; existing user reroutes are preserved. Execution wires are not rewritten. |
+| **Auto Layout, Group & Route** | Run layout, output grouping and routing in a single undo step. |
+| **Pin / Unpin Selected for Layout** | Keep nodes fixed during layout. Pinning a comment locks its bounds and contents. Pin state is stored in per-project user preferences and survives editor restarts. |
+
+Existing comments are treated as blocks during whole-graph layout, with their contents
+arranged internally before placing the blocks. Nested comments retain their membership.
+A pinned expression anchors its entire existing comment block. Selection-only layout
+resizes only selected comments; connected-chain layout can start from a comment to
+include its contents. Hand-authored groups and pinned expressions are excluded from
+new automatic output groups. Regrouping reuses plugin-created comments.
+
+**Editor Preferences > Plugins > Blueprint Anti-Pasta > Material Editor:**
+
+- **Preserve Material Comment Groups**: enabled by default. Turn it off to solve
+  expressions independently instead of keeping existing comments as layout blocks.
+- **Frame Material Layout**: enabled by default. Zoom and pan to the affected nodes
+  after layout, without changing the selection. Also available as **Frame Nodes After
+  Layout** in the toolbar dropdown.
+
+Expression positions, material output position, comment bounds and reroute connections
+are saved with the material when you Apply/Save in the Material Editor. Each layout
+action is one undo step. Materials always use the layered solver and the shared spacing
+preferences; Blueprint-specific wire-handling modes do not affect material actions.
+Routing uses obstacle-clear lanes when available; it leaves a wire intact if it cannot
+find a clear lane. Pinning is a user preference, separate from layout undo.
+
+UE 5.8 Win64 automation coverage includes chains and named reroutes, fixed comment
+blocks, output groups, persisted reroute chains and source channels, undo, graph
+rebuilds, and toolbar targeting across material and material-function editors. Run
+`Automation RunTests BlueprintAutoLayout.Material` from the editor console to repeat it.
 
 ## Settings
 
@@ -186,7 +230,8 @@ Known limitations:
 - **Long (multi-column) edges are routed through reroute knots** (v0.6.1) so they draw as straight segments rather than one curved spline. Pin positions feeding the lanes are *estimated* (not read from the live widget), so on complex multi-pin nodes (e.g. Timeline) a knotted lane can sit slightly off the exact pin and leave a gentle bend.
 - **The layered engine ranks by longest path over all links** (no network-simplex balancing yet), so data-heavy graphs can be wider than strictly necessary; the exec spine stays straight regardless.
 - No asset-action ("layout all graphs in this BP") — operates on the visible graph only.
-- Material/Niagara/Behavior-Tree graphs aren't handled yet — Blueprint graphs only.
+- Niagara and Behavior-Tree graphs are not supported. Material Editor enhancements
+  (connected chains, grouping, pinning, routing and toolbar) target UE 5.8 and newer.
 
 ## Contributing / repo hygiene
 
